@@ -2,7 +2,7 @@
 
 ### "끝없는 갈증" 🏜️
 
-<img width="710" height="500" alt="image" src="https://github.com/user-attachments/assets/a866fccd-b890-4707-a63d-f62a74226c43" />
+<img width="850" height="500" alt="title1" src="https://github.com/user-attachments/assets/307f8aed-3f70-4439-9dd0-c841adba0bd3" />
 
 ## Quench (갈증을 가라앉히다)
 
