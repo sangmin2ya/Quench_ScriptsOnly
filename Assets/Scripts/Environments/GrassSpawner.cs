@@ -1,6 +1,9 @@
 using System.Collections.Generic;
 using UnityEngine;
 
+/// <summary>
+/// 지형 메쉬 위에 랜덤으로 풀과 바위, 선인장을 배치하는 스크립트 - 현재 GrassSpawnerEditor로 대체됨
+/// </summary>
 public class GrassSpawner : MonoBehaviour
 {
     public List<GameObject> meshObjects = new List<GameObject>();

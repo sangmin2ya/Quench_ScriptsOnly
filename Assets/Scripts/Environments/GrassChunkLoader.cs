@@ -2,8 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// 플레이어 위치에 따라 청크를 활성화/비활성화하는 런타임 로더입니다.
-/// 씬에 빈 오브젝트를 만들고 이 컴포넌트를 추가하세요.
+/// 플레이어 위치에 따라 청크를 활성화/비활성화하는 런타임 로더
 /// </summary>
 public class GrassChunkLoader : MonoBehaviour
 {
