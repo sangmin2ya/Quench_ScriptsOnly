@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
@@ -19,6 +20,12 @@ public class GrassSpawnerEditorWindow : EditorWindow
     // 청크 설정
     private float chunkSize = 20f;
     private Transform parentTransform;
+    // 같은 시드면 같은 배치가 생성됨 (배리에이션 비교용). 창을 다시 열어도 유지되도록 EditorPrefs에 저장
+    private const string SeedPrefsKey = "Quench.GrassSpawner.Seed";
+    private const string MaxSlopePrefsKey = "Quench.GrassSpawner.MaxSlope";
+    private int seed = 0;
+    // 이 각도보다 가파른 면(절벽, 아랫면)에는 배치하지 않음
+    private float maxSlope = 60f;
 
     // 스크롤 위치
     private Vector2 scrollPosition;
@@ -35,6 +42,12 @@ public class GrassSpawnerEditorWindow : EditorWindow
     {
         var window = GetWindow<GrassSpawnerEditorWindow>("Grass & Rock Spawner");
         window.minSize = new Vector2(350, 600);
+    }
+
+    private void OnEnable()
+    {
+        seed = EditorPrefs.GetInt(SeedPrefsKey, 0);
+        maxSlope = EditorPrefs.GetFloat(MaxSlopePrefsKey, 60f);
     }
 
     private void OnGUI()
@@ -63,6 +76,22 @@ public class GrassSpawnerEditorWindow : EditorWindow
             EditorGUI.indentLevel++;
             chunkSize = EditorGUILayout.Slider("Chunk Size", chunkSize, 5f, 100f);
             EditorGUILayout.HelpBox($"청크 크기: {chunkSize}x{chunkSize} 유닛", MessageType.Info);
+            EditorGUILayout.BeginHorizontal();
+            EditorGUI.BeginChangeCheck();
+            seed = EditorGUILayout.IntField("Seed", seed);
+            if (GUILayout.Button("Random", GUILayout.Width(70)))
+            {
+                seed = UnityEngine.Random.Range(int.MinValue, int.MaxValue);
+                GUI.FocusControl(null); // 입력 중인 필드에 새 값이 바로 보이도록
+                EditorPrefs.SetInt(SeedPrefsKey, seed);
+            }
+            EditorGUILayout.EndHorizontal();
+            maxSlope = EditorGUILayout.Slider("Max Slope", maxSlope, 0f, 90f);
+            if (EditorGUI.EndChangeCheck())
+            {
+                EditorPrefs.SetInt(SeedPrefsKey, seed);
+                EditorPrefs.SetFloat(MaxSlopePrefsKey, maxSlope);
+            }
             EditorGUI.indentLevel--;
         }
 
@@ -70,6 +99,7 @@ public class GrassSpawnerEditorWindow : EditorWindow
 
         // 밀도 설정 (청크당)
         EditorGUILayout.LabelField("Density Settings (Per Chunk)", EditorStyles.boldLabel);
+        EditorGUILayout.HelpBox("지면 표면 넓이 Chunk Size² 당 개수입니다. 청크 안 지면 표면 넓이에 비례해 배치됩니다.", MessageType.None);
         grassDensity = EditorGUILayout.IntSlider("Grass Density", grassDensity, 0, 500);
         rockDensity = EditorGUILayout.IntSlider("Rock Density", rockDensity, 0, 200);
         cactusDensity = EditorGUILayout.IntSlider("Cactus Density", cactusDensity, 0, 100);
@@ -272,6 +302,17 @@ public class GrassSpawnerEditorWindow : EditorWindow
 
         Undo.RegisterFullObjectHierarchyUndo(parentTransform.gameObject, "Generate Chunks");
 
+        SurfaceSampler[,] chunkSamplers = BuildChunkSamplers(meshObjects, startPos, chunksX, chunksZ);
+
+        // 종류 순서는 시드 파생에 쓰이므로 고정 (Grass, Rock, Cactus, Big Rock)
+        SpawnGroup[] spawnGroups =
+        {
+            new SpawnGroup { prefabs = grassPrefabs.FindAll(p => p != null), density = grassDensity },
+            new SpawnGroup { prefabs = rockPrefabs.FindAll(p => p != null), density = rockDensity },
+            new SpawnGroup { prefabs = cactusPrefabs.FindAll(p => p != null), density = cactusDensity },
+            new SpawnGroup { prefabs = bigRockPrefabs.FindAll(p => p != null), density = bigRockDensity },
+        };
+
         int totalSpawned = 0;
         int chunkCount = 0;
 
@@ -288,26 +329,19 @@ public class GrassSpawnerEditorWindow : EditorWindow
 
                 Bounds chunkBounds = new Bounds(chunkCenter, new Vector3(chunkSize, totalBounds.size.y, chunkSize));
 
-                // 이 청크에 해당하는 메시 찾기
-                List<MeshData> chunkMeshes = new List<MeshData>();
-                foreach (GameObject meshObject in meshObjects)
-                {
-                    MeshRenderer renderer = meshObject.GetComponent<MeshRenderer>();
-                    if (renderer != null && renderer.bounds.Intersects(chunkBounds))
-                    {
-                        MeshFilter meshFilter = meshObject.GetComponent<MeshFilter>();
-                        if (meshFilter != null && meshFilter.sharedMesh != null)
-                        {
-                            chunkMeshes.Add(new MeshData
-                            {
-                                mesh = meshFilter.sharedMesh,
-                                transform = meshObject.transform
-                            });
-                        }
-                    }
-                }
+                // 이 청크 영역으로 잘린 지면 삼각형
+                SurfaceSampler sampler = chunkSamplers[x, z];
+                if (sampler.TriangleCount == 0) continue;
 
-                if (chunkMeshes.Count == 0) continue;
+                // 청크 안 지면 넓이에 비례한 배치 개수 (Density는 지면이 꽉 찬 청크 기준)
+                int[] counts = new int[spawnGroups.Length];
+                int totalCount = 0;
+                for (int i = 0; i < spawnGroups.Length; i++)
+                {
+                    counts[i] = spawnGroups[i].prefabs.Count > 0 ? ScaledCount(spawnGroups[i].density, sampler.TotalArea) : 0;
+                    totalCount += counts[i];
+                }
+                if (totalCount == 0) continue;
 
                 // 청크 오브젝트 생성
                 GameObject chunkObject = new GameObject($"Chunk_{x}_{z}");
@@ -320,9 +354,14 @@ public class GrassSpawnerEditorWindow : EditorWindow
 
                 Undo.RegisterCreatedObjectUndo(chunkObject, "Create Chunk");
 
-                // 오브젝트 스폰
-                int spawned = SpawnInChunk(chunkObject.transform, chunkMeshes, chunkBounds);
-                totalSpawned += spawned;
+                // 오브젝트 스폰. 청크·종류마다 시드에서 파생한 난수를 써서
+                // 다른 종류의 설정을 바꿔도 이 청크의 이 종류 배치는 그대로 재현됨 (지면 메시 구성이 같을 때)
+                for (int i = 0; i < spawnGroups.Length; i++)
+                {
+                    if (counts[i] == 0) continue;
+                    System.Random random = new System.Random(DeriveSeed(x, z, i));
+                    totalSpawned += SpawnType(chunkObject.transform, spawnGroups[i].prefabs, counts[i], sampler, random);
+                }
                 chunkCount++;
 
                 // 청크 비활성화 (런타임에 로더가 활성화)
@@ -330,79 +369,114 @@ public class GrassSpawnerEditorWindow : EditorWindow
             }
         }
 
-        Debug.Log($"Generated {chunkCount} chunks with {totalSpawned} total objects");
+        Debug.Log($"Generated {chunkCount} chunks with {totalSpawned} total objects (seed {seed})");
     }
 
-    private int SpawnInChunk(Transform chunkTransform, List<MeshData> meshDataList, Bounds chunkBounds)
+    private struct SpawnGroup
     {
-        int spawnedCount = 0;
+        public List<GameObject> prefabs;
+        public int density;
+    }
 
-        List<GameObject> validGrass = grassPrefabs.FindAll(p => p != null);
-        List<GameObject> validRocks = rockPrefabs.FindAll(p => p != null);
-        List<GameObject> validCactus = cactusPrefabs.FindAll(p => p != null);
-        List<GameObject> validBigRocks = bigRockPrefabs.FindAll(p => p != null);
+    private int ScaledCount(int density, double groundArea)
+    {
+        return (int)System.Math.Round(density * groundArea / (chunkSize * chunkSize));
+    }
 
-        foreach (MeshData meshData in meshDataList)
+    /// <summary>
+    /// 각 메시의 정점을 한 번만 읽어 월드 좌표로 바꾸고, 삼각형을 겹치는 청크마다 청크 영역으로 잘라 분배
+    /// </summary>
+    private SurfaceSampler[,] BuildChunkSamplers(List<GameObject> meshObjects, Vector3 startPos, int chunksX, int chunksZ)
+    {
+        SurfaceSampler[,] samplers = new SurfaceSampler[chunksX, chunksZ];
+        for (int x = 0; x < chunksX; x++)
         {
-            Vector3[] vertices = meshData.mesh.vertices;
-            int[] triangles = meshData.mesh.triangles;
-
-            // Grass
-            if (validGrass.Count > 0 && grassDensity > 0)
+            for (int z = 0; z < chunksZ; z++)
             {
-                spawnedCount += SpawnType(chunkTransform, validGrass, grassDensity, meshData, chunkBounds);
-            }
-
-            // Rocks
-            if (validRocks.Count > 0 && rockDensity > 0)
-            {
-                spawnedCount += SpawnType(chunkTransform, validRocks, rockDensity, meshData, chunkBounds);
-            }
-
-            // Cactus
-            if (validCactus.Count > 0 && cactusDensity > 0)
-            {
-                spawnedCount += SpawnType(chunkTransform, validCactus, cactusDensity, meshData, chunkBounds);
-            }
-
-            // Big Rocks
-            if (validBigRocks.Count > 0 && bigRockDensity > 0)
-            {
-                spawnedCount += SpawnType(chunkTransform, validBigRocks, bigRockDensity, meshData, chunkBounds);
+                samplers[x, z] = new SurfaceSampler();
             }
         }
 
-        return spawnedCount;
+        // 0도일 때 회전 오차로 평평한 면까지 빠지지 않도록 약간 여유
+        float minNormalY = Mathf.Min(Mathf.Cos(maxSlope * Mathf.Deg2Rad), 1f - 1e-4f);
+        foreach (GameObject meshObject in meshObjects)
+        {
+            MeshFilter meshFilter = meshObject.GetComponent<MeshFilter>();
+            if (meshFilter == null || meshFilter.sharedMesh == null) continue;
+
+            Vector3[] vertices = meshFilter.sharedMesh.vertices;
+            int[] triangles = meshFilter.sharedMesh.triangles;
+            Transform meshTransform = meshObject.transform;
+            // 음수 스케일(반전)이면 월드 좌표에서 감기 순서가 뒤집혀 법선 부호도 반대
+            float normalSign = meshTransform.localToWorldMatrix.determinant < 0f ? -1f : 1f;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                vertices[i] = meshTransform.TransformPoint(vertices[i]);
+            }
+
+            for (int i = 0; i + 2 < triangles.Length; i += 3)
+            {
+                Vector3 a = vertices[triangles[i]];
+                Vector3 b = vertices[triangles[i + 1]];
+                Vector3 c = vertices[triangles[i + 2]];
+
+                // 너무 가파르거나 아래를 향한 면은 제외
+                Vector3 normal = Vector3.Cross(b - a, c - a).normalized * normalSign;
+                if (normal.y < minNormalY) continue;
+
+                float triMinX = Mathf.Min(a.x, Mathf.Min(b.x, c.x));
+                float triMaxX = Mathf.Max(a.x, Mathf.Max(b.x, c.x));
+                float triMinZ = Mathf.Min(a.z, Mathf.Min(b.z, c.z));
+                float triMaxZ = Mathf.Max(a.z, Mathf.Max(b.z, c.z));
+                int minX = Mathf.Max(0, Mathf.FloorToInt((triMinX - startPos.x) / chunkSize));
+                int maxX = Mathf.Min(chunksX - 1, Mathf.FloorToInt((triMaxX - startPos.x) / chunkSize));
+                int minZ = Mathf.Max(0, Mathf.FloorToInt((triMinZ - startPos.z) / chunkSize));
+                int maxZ = Mathf.Min(chunksZ - 1, Mathf.FloorToInt((triMaxZ - startPos.z) / chunkSize));
+                for (int x = minX; x <= maxX; x++)
+                {
+                    for (int z = minZ; z <= maxZ; z++)
+                    {
+                        float chunkMinX = startPos.x + x * chunkSize;
+                        float chunkMinZ = startPos.z + z * chunkSize;
+                        samplers[x, z].AddTriangleClippedXZ(a, b, c, chunkMinX, chunkMinX + chunkSize, chunkMinZ, chunkMinZ + chunkSize);
+                    }
+                }
+            }
+        }
+        return samplers;
     }
 
-    private int SpawnType(Transform chunkTransform, List<GameObject> prefabs, int density, MeshData meshData, Bounds chunkBounds)
+    // 시드, 청크 좌표, 종류 인덱스를 섞어 청크·종류별 시드 생성
+    private int DeriveSeed(int x, int z, int groupIndex)
     {
-        int spawnedCount = 0;
-        Vector3[] vertices = meshData.mesh.vertices;
-        int[] triangles = meshData.mesh.triangles;
-
-        for (int i = 0; i < density; i++)
+        unchecked
         {
-            int triangleIndex = Random.Range(0, triangles.Length / 3) * 3;
-            Vector3 vert1 = meshData.transform.TransformPoint(vertices[triangles[triangleIndex]]);
-            Vector3 vert2 = meshData.transform.TransformPoint(vertices[triangles[triangleIndex + 1]]);
-            Vector3 vert3 = meshData.transform.TransformPoint(vertices[triangles[triangleIndex + 2]]);
+            uint hash = (uint)seed;
+            hash = (hash ^ (uint)x * 0x9E3779B1u) * 0x85EBCA6Bu;
+            hash = (hash ^ (uint)z * 0xC2B2AE35u) * 0x27D4EB2Fu;
+            hash = (hash ^ (uint)groupIndex * 0x165667B1u) * 0x85EBCA6Bu;
+            hash ^= hash >> 16;
+            return (int)(hash & 0x7FFFFFFF);
+        }
+    }
 
-            Vector3 randomPoint = RandomPointInTriangle(vert1, vert2, vert3);
+    /// <summary>
+    /// 청크 안에 count개를 배치. 샘플러가 청크 영역으로 잘린 삼각형만 가지므로 모든 점이 청크 안에 있음
+    /// </summary>
+    private int SpawnType(Transform chunkTransform, List<GameObject> prefabs, int count, SurfaceSampler sampler, System.Random random)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            Vector3 randomPoint = sampler.Sample(random);
 
-            // 청크 범위 내에 있는지 확인
-            if (!chunkBounds.Contains(randomPoint)) continue;
-
-            GameObject prefab = prefabs[Random.Range(0, prefabs.Count)];
+            GameObject prefab = prefabs[random.Next(prefabs.Count)];
             GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
             instance.transform.position = randomPoint;
-            instance.transform.rotation = Quaternion.Euler(0, Random.Range(0, 360), 0);
+            instance.transform.rotation = Quaternion.Euler(0, random.Next(0, 360), 0);
             instance.transform.SetParent(chunkTransform);
-
-            spawnedCount++;
         }
 
-        return spawnedCount;
+        return count;
     }
 
     private List<GameObject> FindGroundMeshObjects()
@@ -419,31 +493,25 @@ public class GrassSpawnerEditorWindow : EditorWindow
             }
         }
 
+        // FindObjectsOfType 순서는 보장되지 않으므로 하이어라키 순서로 정렬 (같은 시드 = 같은 배치)
+        Dictionary<GameObject, string> keys = new Dictionary<GameObject, string>();
+        foreach (GameObject meshObject in meshObjects)
+        {
+            keys[meshObject] = HierarchyKey(meshObject.transform);
+        }
+        meshObjects.Sort((left, right) => string.CompareOrdinal(keys[left], keys[right]));
         return meshObjects;
     }
 
-    /// <summary>
-    /// 삼각형 내부의 랜덤한 점을 반환
-    /// </summary>
-    private Vector3 RandomPointInTriangle(Vector3 a, Vector3 b, Vector3 c)
+    // 루트부터 각 단계의 형제 순서를 이어 붙인 정렬 키 (씬 경로 포함)
+    private static string HierarchyKey(Transform target)
     {
-        float r1 = Random.value;
-        float r2 = Random.value;
-
-        if (r1 + r2 > 1)
+        string key = "";
+        for (Transform current = target; current != null; current = current.parent)
         {
-            r1 = 1 - r1;
-            r2 = 1 - r2;
+            key = current.GetSiblingIndex().ToString("D6") + "/" + key;
         }
-
-        float r3 = 1 - r1 - r2;
-
-        return r1 * a + r2 * b + r3 * c;
-    }
-
-    private struct MeshData
-    {
-        public Mesh mesh;
-        public Transform transform;
+        return target.gameObject.scene.path + ":" + key;
     }
 }
+#endif
