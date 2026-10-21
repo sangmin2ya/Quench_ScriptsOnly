@@ -6,6 +6,8 @@ using UnityEngine;
 public class DataManager : MonoBehaviour
 {
     private static DataManager _instance;
+    // 종료 중 Instance 접근으로 새 DataManager가 만들어지지 않도록 존재 여부만 확인
+    public static bool HasInstance => _instance != null;
     public static DataManager Instance
     {
         get
@@ -30,10 +32,10 @@ public class DataManager : MonoBehaviour
         set
         {
             //값이 달라지면 언어타입 변경
-            if (languageType != value)
+            //Json을 모두 읽은 경우에만 언어타입 변경 (이전에 로드에 실패한 언어는 다시 시도)
+            if ((languageType != value || !JsonReader.Instance.IsLoaded(value)) && JsonReader.Instance.Initialize(value))
             {
                 languageType = value;
-                JsonReader.Instance.Initialize(languageType);
                 //이벤트를 통해 모든 ItemBase의 언어타입을 변경
                 LanguageChangedEvent?.Invoke(languageType);
             }

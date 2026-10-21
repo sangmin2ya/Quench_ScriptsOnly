@@ -12,10 +12,27 @@ public class CollectionCount : MonoBehaviour
     [SerializeField]
     private TextMeshProUGUI deathCountText;
     private bool _isOnEndingScreen = false;
-    // Start is called before the first frame update
-    void Start()
+    private bool _hasData = false; // 결과 텍스트가 표시된 상태인지
+    void Awake()
     {
+        //결과 화면이 떠 있는 동안 언어가 바뀌면 텍스트를 다시 적용
+        DataManager.Instance.LanguageChangedEvent += OnLanguageChanged;
+    }
 
+    void OnDestroy()
+    {
+        if (DataManager.HasInstance)
+        {
+            DataManager.Instance.LanguageChangedEvent -= OnLanguageChanged;
+        }
+    }
+
+    private void OnLanguageChanged(LanguageType newLanguage)
+    {
+        if (_hasData)
+        {
+            RefreshTexts();
+        }
     }
 
     // Update is called once per frame
@@ -56,9 +73,16 @@ public class CollectionCount : MonoBehaviour
     }
     public void SetData()
     {
+        RefreshTexts();
+        _hasData = true;
+        Invoke("OnEndingScreen", 20f);
+    }
+
+    // 현재 언어로 결과 텍스트 설정
+    private void RefreshTexts()
+    {
         endingExpText.text = !DataManager.Instance._getGemstone ? JsonReader.Instance.IngameText("end_01") : JsonReader.Instance.IngameText("end_02");
         collectionCountText.text = JsonReader.Instance.IngameText("result_01") + $" [ {DataManager.Instance.GetCollectedCount().ToString()} / 8 ]";
         deathCountText.text = JsonReader.Instance.IngameText("result_02") + $" : {DataManager.Instance._deathCount}";
-        Invoke("OnEndingScreen", 20f);
     }
 }

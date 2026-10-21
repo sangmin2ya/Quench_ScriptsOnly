@@ -152,7 +152,10 @@ public class ItemBase : MonoBehaviour, IInteractable
 
     void OnDestroy()
     {
-        DataManager.Instance.LanguageChangedEvent -= OnLanguageChanged;
+        if (DataManager.HasInstance)
+        {
+            DataManager.Instance.LanguageChangedEvent -= OnLanguageChanged;
+        }
         ScreenManager.Instance.HideInteractable();
         if (gameObject == null) return;
         if (gameObject.transform.parent == null) return;

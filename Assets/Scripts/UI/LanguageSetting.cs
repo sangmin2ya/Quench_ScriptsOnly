@@ -23,19 +23,18 @@ public class LanguageSetting : MonoBehaviour
 
     public void OnLanguageChange(int index)
     {
-        switch (index)
+        LanguageType previous = DataManager.Instance.LanguageType;
+        LanguageType requested = index == 0 ? LanguageType.English : LanguageType.Korean;
+        DataManager.Instance.LanguageType = requested;
+
+        //Json 데이터 교체에 실패하면 로컬라이징 패키지 언어도 바꾸지 않고 드롭다운을 되돌림 (언어 혼합 방지)
+        if (DataManager.Instance.LanguageType != requested)
         {
-            case 0:
-                DataManager.Instance.LanguageType = LanguageType.English;
-                //로컬라이징 패키지 언어 변경
-                LocalizationSettings.SelectedLocale = LocalizationSettings.AvailableLocales.Locales[LanguageType.English.GetHashCode()];
-                break;
-            case 1:
-                DataManager.Instance.LanguageType = LanguageType.Korean;
-                //로컬라이징 패키지 언어 변경
-                LocalizationSettings.SelectedLocale = LocalizationSettings.AvailableLocales.Locales[LanguageType.Korean.GetHashCode()];
-                break;
+            languageDropdown.SetValueWithoutNotify(previous == LanguageType.English ? 0 : 1);
+            return;
         }
+        //로컬라이징 패키지 언어 변경
+        LocalizationSettings.SelectedLocale = LocalizationSettings.AvailableLocales.Locales[requested.GetHashCode()];
         //SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
 }
